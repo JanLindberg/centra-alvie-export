@@ -140,7 +140,7 @@ cat > "${POLICY_FILE}" <<EOF
       "duration": "0s"
     }
   }],
-  "alertStrategy": {"autoClose": "86400s"},
+  "alertStrategy": {"notificationPrompts": ["OPENED"], "autoClose": "86400s"},
   "notificationChannels": ["${CHANNEL}"],
   "documentation": {
     "mimeType": "text/markdown",
@@ -167,7 +167,7 @@ cat > "${POLICY_FILE}" <<EOF
       "evaluationInterval": "300s"
     }
   }],
-  "alertStrategy": {"autoClose": "86400s"},
+  "alertStrategy": {"notificationPrompts": ["OPENED"], "autoClose": "86400s"},
   "notificationChannels": ["${CHANNEL}"],
   "documentation": {
     "mimeType": "text/markdown",
@@ -192,7 +192,7 @@ cat > "${POLICY_FILE}" <<EOF
       "labelExtractors": {"day": "REGEXP_EXTRACT(textPayload, \\"DATA_CHECK ([^:]+):\\")"}
     }
   }],
-  "alertStrategy": {"notificationRateLimit": {"period": "3600s"}, "autoClose": "86400s"},
+  "alertStrategy": {"notificationPrompts": ["OPENED"], "notificationRateLimit": {"period": "3600s"}, "autoClose": "86400s"},
   "notificationChannels": ["${CHANNEL}"],
   "documentation": {
     "mimeType": "text/markdown",
