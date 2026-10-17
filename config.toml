@@ -1,0 +1,38 @@
+# Centra -> Precis Digital (Alvie) daily sales export.
+# API URL and token are read from .env (CENTRA_API_URL, CENTRA_API_TOKEN).
+
+timezone = "Europe/Stockholm"   # day boundary for order dates
+page_size = 100                 # Centra max is 100
+
+# Orders are excluded if any of these match.
+exclude_statuses = ["DELETED"]  # DELETED = cancelled in Centra
+min_product_value = 1.0         # product value (lines + discounts, incl. VAT) below this is not a real purchase
+exclude_order_numbers = []      # manual block list, e.g. test orders placed after go-live
+
+# What conversion_value includes. To be confirmed with Precis Digital.
+[value]
+include_vat = true
+include_shipping = true
+
+# One entry per Centra D2C store. start_date = first real sales day after go-live.
+[[brands]]
+store_id = 1
+name = "Chevalier"
+start_date = 2026-03-30
+
+[[brands]]
+store_id = 2
+name = "Alaska"
+start_date = 2025-06-28
+
+[output]
+writers = ["csv"]
+
+[output.csv]
+dir = "output"
+
+[output.bigquery]
+project = "centra-export-dev"
+dataset = "alvie_export"
+location = "EU"
+batch_days = 30                 # (date, brand) pairs per BigQuery transaction
