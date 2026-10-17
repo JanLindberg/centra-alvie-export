@@ -219,6 +219,11 @@ def main(argv=None):
             kept = [o for o in orders if keep_order(o, cfg)]
             rows = aggregate(kept, day, brand, cfg)
             log.info("%s %s: %d orders fetched, %d kept, %d rows", brand, day, len(orders), len(kept), len(rows))
+            if not kept:
+                # The day is still logged, so this alerts once (log-based alert on DATA_CHECK)
+                # instead of retrying every night. Rerun with --force if Centra was wrong.
+                log.error("DATA_CHECK %s %s: %d orders fetched, 0 kept. Day logged as empty; "
+                          "verify in Centra and rerun with --force if wrong.", brand, day, len(orders))
             if args.dry_run:
                 for r in rows:
                     print(r)

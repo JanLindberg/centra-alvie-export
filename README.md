@@ -48,9 +48,35 @@ cp .env.example .env    # fill in CENTRA_API_TOKEN
 
 ```
 gcloud auth login && gcloud auth application-default login
-PROJECT=<project-id> setup/gcp_setup.sh
+PROJECT=<project-id> ALERT_EMAIL=<email> setup/gcp_setup.sh   # once per environment
+PROJECT=<project-id> setup/deploy.sh                          # after every code change
 ```
 
-Creates the dataset (no expiry), the `centra-export` service account and its permissions.
+`gcp_setup.sh` enables the APIs, creates the dataset (no expiry), the `centra-export`
+service account and its permissions, stores the Centra token from `.env` in Secret Manager
+(`centra-api-token`) and creates an e-mail alert on failed runs.
 `PD_READER=group:...` grants Precis Digital read access to the dataset.
-Tables and views are created by the export on its first run.
+
+`deploy.sh` builds the image with Cloud Build and deploys the Cloud Run Job `centra-export`
+(europe-north1), started daily at 03:00 Europe/Stockholm by Cloud Scheduler job
+`centra-export-daily` (europe-west1; Scheduler isn't available in europe-north1).
+Tables and views are created by the export on its first run, which also loads the full history.
+
+```
+gcloud run jobs execute centra-export --region europe-north1                     # run now
+gcloud run jobs execute centra-export --region europe-north1 \
+  --args="--writers=bigquery,--from=2026-10-12,--to=2026-10-12,--force"         # redo a day
+printf '%s' "<new token>" | gcloud secrets versions add centra-api-token --data-file=-   # rotate token
+```
+
+The Centra token expires in 2035.
+
+## Alerts
+
+E-mail to `ALERT_EMAIL` via Cloud Monitoring:
+
+| Alert | Fires when |
+|---|---|
+| Centra export job failed | A run fails after Cloud Run's retry (Centra down, expired token, BigQuery error, bug). Missed days are caught up by the next successful run. |
+| Centra export no successful run | No successful run for 26 hours, e.g. the scheduler is paused or billing is disabled. |
+| Centra export data check | A brand had no orders on a day (`DATA_CHECK` in the log). The day is logged as empty and not retried, so this fires once; rerun the day with `--force` if Centra was wrong. |

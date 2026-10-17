@@ -92,7 +92,7 @@ fi
 gcloud secrets add-iam-policy-binding "${SECRET}" \
   --member "serviceAccount:${SA_EMAIL}" --role roles/secretmanager.secretAccessor >/dev/null
 
-echo "== Failure alert to ${ALERT_EMAIL}"
+echo "== Alerts to ${ALERT_EMAIL}"
 # Notification channels are only in gcloud beta, so use the REST API.
 API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels"
 AUTH="Authorization: Bearer $(gcloud auth print-access-token)"
@@ -107,17 +107,28 @@ if [[ -z "${CHANNEL}" ]]; then
     -d "{\"type\": \"email\", \"displayName\": \"${ALERT_EMAIL}\", \"labels\": {\"email_address\": \"${ALERT_EMAIL}\"}}" |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["name"])')"
 fi
-POLICY_NAME="Centra export job failed"
-if [[ -z "$(gcloud monitoring policies list --filter "displayName=\"${POLICY_NAME}\"" --format 'value(name)')" ]]; then
-  POLICY_FILE="$(mktemp)"
-  cat > "${POLICY_FILE}" <<EOF
+# create_policy NAME JSON-FILE: create an alert policy unless one with that name exists.
+create_policy() {
+  if [[ -z "$(gcloud monitoring policies list --filter "displayName=\"$1\"" --format 'value(name)' 2>/dev/null)" ]]; then
+    gcloud monitoring policies create --policy-from-file "$2" >/dev/null
+    echo "   created: $1"
+  else
+    echo "   exists: $1"
+  fi
+  rm -f "$2"
+}
+JOB_FILTER="resource.type = \\\"cloud_run_job\\\" AND resource.labels.job_name = \\\"${JOB}\\\""
+
+# A. The job ran and failed (after Cloud Run's retry).
+POLICY_FILE="$(mktemp)"
+cat > "${POLICY_FILE}" <<EOF
 {
-  "displayName": "${POLICY_NAME}",
+  "displayName": "Centra export job failed",
   "combiner": "OR",
   "conditions": [{
     "displayName": "Cloud Run Job ${JOB} execution failed",
     "conditionThreshold": {
-      "filter": "resource.type = \"cloud_run_job\" AND resource.labels.job_name = \"${JOB}\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result = \"failed\"",
+      "filter": "${JOB_FILTER} AND metric.type = \\"run.googleapis.com/job/completed_execution_count\\" AND metric.labels.result = \\"failed\\"",
       "aggregations": [{"alignmentPeriod": "300s", "perSeriesAligner": "ALIGN_SUM"}],
       "comparison": "COMPARISON_GT",
       "thresholdValue": 0,
@@ -132,11 +143,53 @@ if [[ -z "$(gcloud monitoring policies list --filter "displayName=\"${POLICY_NAM
   }
 }
 EOF
-  gcloud monitoring policies create --policy-from-file "${POLICY_FILE}" >/dev/null
-  rm -f "${POLICY_FILE}"
-  echo "   alert policy created"
-else
-  echo "   alert policy exists"
-fi
+create_policy "Centra export job failed" "${POLICY_FILE}"
+
+# B. No successful run for 26 hours: the job didn't start at all (scheduler paused or
+# failing, billing disabled). PromQL, since metric-absence conditions can't span a day.
+POLICY_FILE="$(mktemp)"
+cat > "${POLICY_FILE}" <<EOF
+{
+  "displayName": "Centra export no successful run",
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "No successful ${JOB} execution in 26 hours",
+    "conditionPrometheusQueryLanguage": {
+      "query": "absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\\"cloud_run_job\\",job_name=\\"${JOB}\\",result=\\"succeeded\\"}[26h])",
+      "duration": "0s",
+      "evaluationInterval": "300s"
+    }
+  }],
+  "alertStrategy": {"autoClose": "86400s"},
+  "notificationChannels": ["${CHANNEL}"],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "The Centra -> Alvie export has not completed successfully for 26 hours. Check that Cloud Scheduler job ${JOB}-daily is enabled and its last attempt succeeded, and that billing is active. Missed days are caught up by the next successful run."
+  }
+}
+EOF
+create_policy "Centra export no successful run" "${POLICY_FILE}"
+
+# C. Data check: a brand had no orders on a day. The day is logged, so this alerts once.
+POLICY_FILE="$(mktemp)"
+cat > "${POLICY_FILE}" <<EOF
+{
+  "displayName": "Centra export data check",
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "Day with no orders",
+    "conditionMatchedLog": {
+      "filter": "${JOB_FILTER} AND textPayload:\\"DATA_CHECK\\""
+    }
+  }],
+  "alertStrategy": {"notificationRateLimit": {"period": "3600s"}, "autoClose": "86400s"},
+  "notificationChannels": ["${CHANNEL}"],
+  "documentation": {
+    "mimeType": "text/markdown",
+    "content": "The export found a day where a brand had no orders (see the DATA_CHECK line in the job log). The day has been logged as empty and will not be retried. Verify in Centra; if orders exist, rerun that day: gcloud run jobs execute ${JOB} --region <region> --args=--writers=bigquery,--from=DATE,--to=DATE,--force"
+  }
+}
+EOF
+create_policy "Centra export data check" "${POLICY_FILE}"
 
 echo "== Done"
