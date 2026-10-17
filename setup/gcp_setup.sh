@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time setup of a Google Cloud environment for the Centra -> Alvie export.
-# Idempotent: safe to run again, existing resources are left as they are.
+# Idempotent: safe to run again. Existing resources are kept; alert policies are updated.
 #
 # Usage:
 #   PROJECT=centra-export-dev ALERT_EMAIL=me@example.com setup/gcp_setup.sh
@@ -107,13 +107,17 @@ if [[ -z "${CHANNEL}" ]]; then
     -d "{\"type\": \"email\", \"displayName\": \"${ALERT_EMAIL}\", \"labels\": {\"email_address\": \"${ALERT_EMAIL}\"}}" |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["name"])')"
 fi
-# create_policy NAME JSON-FILE: create an alert policy unless one with that name exists.
+# create_policy NAME JSON-FILE: create an alert policy, or update the one with that name.
+# documentation.subject/content are the alert e-mail's subject and body.
 create_policy() {
-  if [[ -z "$(gcloud monitoring policies list --filter "displayName=\"$1\"" --format 'value(name)' 2>/dev/null)" ]]; then
+  local existing
+  existing="$(gcloud monitoring policies list --filter "displayName=\"$1\"" --format 'value(name)' 2>/dev/null)"
+  if [[ -z "${existing}" ]]; then
     gcloud monitoring policies create --policy-from-file "$2" >/dev/null
     echo "   created: $1"
   else
-    echo "   exists: $1"
+    gcloud monitoring policies update "${existing}" --policy-from-file "$2" >/dev/null
+    echo "   updated: $1"
   fi
   rm -f "$2"
 }
@@ -124,6 +128,7 @@ POLICY_FILE="$(mktemp)"
 cat > "${POLICY_FILE}" <<EOF
 {
   "displayName": "Centra export job failed",
+  "severity": "ERROR",
   "combiner": "OR",
   "conditions": [{
     "displayName": "Cloud Run Job ${JOB} execution failed",
@@ -139,7 +144,8 @@ cat > "${POLICY_FILE}" <<EOF
   "notificationChannels": ["${CHANNEL}"],
   "documentation": {
     "mimeType": "text/markdown",
-    "content": "The daily Centra -> Alvie export failed after retries. Check the job logs in Cloud Run. Missed days are caught up automatically by the next successful run. If every run fails with an authorization error, the Centra API token may have expired."
+    "subject": "Centra export failed",
+    "content": "The export job failed and yesterday's sales are not in BigQuery. The cause is in the job log. The next successful run catches up."
   }
 }
 EOF
@@ -151,6 +157,7 @@ POLICY_FILE="$(mktemp)"
 cat > "${POLICY_FILE}" <<EOF
 {
   "displayName": "Centra export no successful run",
+  "severity": "ERROR",
   "combiner": "OR",
   "conditions": [{
     "displayName": "No successful ${JOB} execution in 26 hours",
@@ -164,7 +171,8 @@ cat > "${POLICY_FILE}" <<EOF
   "notificationChannels": ["${CHANNEL}"],
   "documentation": {
     "mimeType": "text/markdown",
-    "content": "The Centra -> Alvie export has not completed successfully for 26 hours. Check that Cloud Scheduler job ${JOB}-daily is enabled and its last attempt succeeded, and that billing is active. Missed days are caught up by the next successful run."
+    "subject": "Centra export has not run for 26 hours",
+    "content": "The export has not run successfully for 26 hours. Check that Cloud Scheduler job ${JOB}-daily is enabled and billing is active."
   }
 }
 EOF
@@ -175,18 +183,21 @@ POLICY_FILE="$(mktemp)"
 cat > "${POLICY_FILE}" <<EOF
 {
   "displayName": "Centra export data check",
+  "severity": "WARNING",
   "combiner": "OR",
   "conditions": [{
     "displayName": "Day with no orders",
     "conditionMatchedLog": {
-      "filter": "${JOB_FILTER} AND textPayload:\\"DATA_CHECK\\""
+      "filter": "${JOB_FILTER} AND textPayload:\\"DATA_CHECK\\"",
+      "labelExtractors": {"day": "REGEXP_EXTRACT(textPayload, \\"DATA_CHECK ([^:]+):\\")"}
     }
   }],
   "alertStrategy": {"notificationRateLimit": {"period": "3600s"}, "autoClose": "86400s"},
   "notificationChannels": ["${CHANNEL}"],
   "documentation": {
     "mimeType": "text/markdown",
-    "content": "The export found a day where a brand had no orders (see the DATA_CHECK line in the job log). The day has been logged as empty and will not be retried. Verify in Centra; if orders exist, rerun that day: gcloud run jobs execute ${JOB} --region <region> --args=--writers=bigquery,--from=DATE,--to=DATE,--force"
+    "subject": "Centra export: no orders for \${log.extracted_label.day}",
+    "content": "No orders found for \${log.extracted_label.day}. Saved as 0 sales and not retried. If Centra has orders that day, rerun it with --force."
   }
 }
 EOF
