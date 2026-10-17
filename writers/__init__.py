@@ -9,6 +9,7 @@ Interface:
     log_day(entry)                  record (day, brand) as delivered; replaces an existing entry
     finalize()                      flush buffered data, refresh per-brand PD outputs
 """
+import os
 import re
 
 ROW_FIELDS = ["date", "conversions", "conversion_value", "currency_code", "country_code", "brand"]
@@ -32,9 +33,12 @@ def make_writers(cfg, names, output_dir=None):
         elif name == "bigquery":
             from writers.bigquery_writer import BigQueryWriter
 
+            # Environment variables select the target per environment (dev, Everhunt).
             bq = out["bigquery"]
-            writers.append(BigQueryWriter(bq["project"], bq["dataset"], bq["location"], brands,
-                                          bq.get("batch_days", 30)))
+            writers.append(BigQueryWriter(os.environ.get("BQ_PROJECT", bq["project"]),
+                                          os.environ.get("BQ_DATASET", bq["dataset"]),
+                                          os.environ.get("BQ_LOCATION", bq["location"]),
+                                          brands, bq.get("batch_days", 30)))
         else:
             raise ValueError(f"Unknown writer: {name}")
     return writers

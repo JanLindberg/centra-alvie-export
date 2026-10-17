@@ -1,0 +1,12 @@
+# Files not uploaded to Cloud Build. Never upload .env (Centra token).
+.git
+.gitignore
+.gcloudignore
+.env
+.venv/
+output/
+test_output/
+__pycache__/
+.DS_Store
+.vscode/
+probe.py
