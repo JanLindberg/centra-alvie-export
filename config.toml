@@ -9,9 +9,9 @@ exclude_statuses = ["DELETED"]  # DELETED = cancelled in Centra
 min_product_value = 1.0         # product value (lines + discounts, incl. VAT) below this is not a real purchase
 exclude_order_numbers = []      # manual block list, e.g. test orders placed after go-live
 
-# What conversion_value includes. To be confirmed with Precis Digital.
+# What conversion_value includes. Precis Digital: excluding VAT, shipping included.
 [value]
-include_vat = true
+include_vat = false
 include_shipping = true
 
 # One entry per Centra D2C store. start_date = first real sales day after go-live.
