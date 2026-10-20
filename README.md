@@ -48,7 +48,7 @@ cp .env.example .env    # fill in CENTRA_API_TOKEN
 
 ```
 gcloud auth login && gcloud auth application-default login
-PROJECT=<project-id> ALERT_EMAIL=<email> setup/gcp_setup.sh   # once per environment
+PROJECT=<project-id> ALERT_EMAIL=<email>[,<email>...] setup/gcp_setup.sh   # once per environment
 PROJECT=<project-id> setup/deploy.sh                          # after every code change
 ```
 
@@ -73,7 +73,7 @@ The Centra token expires in 2035.
 
 ## Alerts
 
-E-mail to `ALERT_EMAIL` via Cloud Monitoring:
+E-mail to each address in `ALERT_EMAIL` (comma-separated) via Cloud Monitoring:
 
 | Alert | Fires when |
 |---|---|

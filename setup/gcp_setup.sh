@@ -4,7 +4,7 @@
 #
 # Usage:
 #   PROJECT=centra-export-dev ALERT_EMAIL=me@example.com setup/gcp_setup.sh
-#   PROJECT=<everhunt-project> ALERT_EMAIL=... PD_READER=group:alvie@precisdigital.com setup/gcp_setup.sh
+#   PROJECT=<everhunt-project> ALERT_EMAIL=a@x.com,b@x.com PD_READER=group:alvie@precisdigital.com setup/gcp_setup.sh
 #
 # The Centra token is read from .env (CENTRA_API_TOKEN) the first time the secret is created.
 # Tables and views are not created here; the export job creates them on first run.
@@ -16,7 +16,7 @@ DATASET="${DATASET:-alvie_export}"
 LOCATION="${LOCATION:-EU}"
 SA_NAME="${SA_NAME:-centra-export}"
 PD_READER="${PD_READER:-}"   # optional IAM member given read access to the dataset, e.g. group:x@y.com
-ALERT_EMAIL="${ALERT_EMAIL:?Set ALERT_EMAIL to the address that gets failure alerts}"
+ALERT_EMAIL="${ALERT_EMAIL:?Set ALERT_EMAIL to the address(es) that get failure alerts, comma-separated}"
 SECRET="${SECRET:-centra-api-token}"
 JOB="${JOB:-centra-export}"
 
@@ -96,17 +96,26 @@ echo "== Alerts to ${ALERT_EMAIL}"
 # Notification channels are only in gcloud beta, so use the REST API.
 API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels"
 AUTH="Authorization: Bearer $(gcloud auth print-access-token)"
-CHANNEL="$(curl -sf -H "${AUTH}" "${API}" | python3 -c '
+# One e-mail channel per address; existing channels are reused.
+EXISTING="$(curl -sf -H "${AUTH}" "${API}")"
+CHANNELS=()
+IFS=',' read -ra EMAILS <<< "${ALERT_EMAIL}"
+for EMAIL in "${EMAILS[@]}"; do
+  EMAIL="${EMAIL// /}"
+  CHANNEL="$(python3 -c '
 import json, sys
 email = sys.argv[1]
-for c in json.load(sys.stdin).get("notificationChannels", []):
+for c in json.loads(sys.argv[2]).get("notificationChannels", []):
     if c["type"] == "email" and c["labels"].get("email_address") == email:
-        print(c["name"]); break' "${ALERT_EMAIL}")"
-if [[ -z "${CHANNEL}" ]]; then
-  CHANNEL="$(curl -sf -X POST -H "${AUTH}" -H "Content-Type: application/json" "${API}" \
-    -d "{\"type\": \"email\", \"displayName\": \"${ALERT_EMAIL}\", \"labels\": {\"email_address\": \"${ALERT_EMAIL}\"}}" |
-    python3 -c 'import json, sys; print(json.load(sys.stdin)["name"])')"
-fi
+        print(c["name"]); break' "${EMAIL}" "${EXISTING}")"
+  if [[ -z "${CHANNEL}" ]]; then
+    CHANNEL="$(curl -sf -X POST -H "${AUTH}" -H "Content-Type: application/json" "${API}" \
+      -d "{\"type\": \"email\", \"displayName\": \"${EMAIL}\", \"labels\": {\"email_address\": \"${EMAIL}\"}}" |
+      python3 -c 'import json, sys; print(json.load(sys.stdin)["name"])')"
+  fi
+  CHANNELS+=("\"${CHANNEL}\"")
+done
+CHANNELS_JSON="[$(IFS=,; echo "${CHANNELS[*]}")]"
 # create_policy NAME JSON-FILE: create an alert policy, or update the one with that name.
 # documentation.subject/content are the alert e-mail's subject and body.
 create_policy() {
@@ -141,7 +150,7 @@ cat > "${POLICY_FILE}" <<EOF
     }
   }],
   "alertStrategy": {"notificationPrompts": ["OPENED"], "autoClose": "86400s"},
-  "notificationChannels": ["${CHANNEL}"],
+  "notificationChannels": ${CHANNELS_JSON},
   "documentation": {
     "mimeType": "text/markdown",
     "subject": "Centra export failed",
@@ -168,7 +177,7 @@ cat > "${POLICY_FILE}" <<EOF
     }
   }],
   "alertStrategy": {"notificationPrompts": ["OPENED"], "autoClose": "86400s"},
-  "notificationChannels": ["${CHANNEL}"],
+  "notificationChannels": ${CHANNELS_JSON},
   "documentation": {
     "mimeType": "text/markdown",
     "subject": "Centra export has not run for 26 hours",
@@ -193,7 +202,7 @@ cat > "${POLICY_FILE}" <<EOF
     }
   }],
   "alertStrategy": {"notificationPrompts": ["OPENED"], "notificationRateLimit": {"period": "3600s"}, "autoClose": "86400s"},
-  "notificationChannels": ["${CHANNEL}"],
+  "notificationChannels": ${CHANNELS_JSON},
   "documentation": {
     "mimeType": "text/markdown",
     "subject": "Centra export: no orders for \${log.extracted_label.day}",
